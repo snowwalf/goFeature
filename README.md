@@ -12,7 +12,7 @@ go get github.com/unixpickle/cuda/cublas
 
 ```
 docker build -t <image_name> -f docker/Dockerfile .
-docker run -dt -v <pwd>:/go/src/github.com/snowwalf/goFeature --name <container_name> <image_name> /bin/bash
+nvidia-docker run -dt -v <pwd>:/go/src/github.com/snowwalf/goFeature --name <container_name> <image_name> /bin/bash
 docker exec -it <container_name> /bin/bash
 ```
 
