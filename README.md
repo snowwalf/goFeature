@@ -18,3 +18,10 @@ docker exec -it <container_name> /bin/bash
 
 ## Build Demo
 go build -tags 'cublas'
+
+## Benchmark
+### Search Benchmark
+
+```
+ go test -tags 'cublas' -bench='BenchmarkSearch' -benchtime=3s -run=none
+```
