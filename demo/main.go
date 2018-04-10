@@ -131,7 +131,7 @@ func main() {
 		}(s)
 	}
 
-	aad new features
+	// aad new features
 	wg.Add(1)
 	go func() {
 		for i := 0; i < 50; i++ {
@@ -160,7 +160,7 @@ func main() {
 		wg.Done()
 	}()
 
-	random delete feature
+	// random delete feature
 	wg.Add(1)
 	go func() {
 		for i := 0; i < 200; i++ {
