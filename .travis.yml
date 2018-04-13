@@ -1,0 +1,12 @@
+sudo: required
+
+language: go
+
+services:
+  - docker
+
+before_install:
+  - export WORKSPACE=$(pwd)
+  - docker build -t go_feature -f docker/Dockerfile .
+  - docker run -dt -v $WORKSPACE:/go/src/github.com/snowwalf/goFeature --name gfs go_feature /bin/bash -c "cd /go/src/github.com/snowwalf/goFeature/demo; go build -tags 'cublas'"
+
