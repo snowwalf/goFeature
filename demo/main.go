@@ -89,7 +89,7 @@ func main() {
 			for j := 0; j < Dimension; j++ {
 				values = append(values, r.Float32()*2-1)
 			}
-			feature.Value, _ = goFeature.TByte(values)
+			feature.Value, _ = goFeature.TFeatureValue(values)
 			feature.ID = goFeature.FeatureID(goFeature.GetRandomString(12))
 			vec1 = append(vec1, feature)
 			ids = append(ids, feature.ID)
@@ -127,7 +127,7 @@ func main() {
 					for j := 0; j < Dimension; j++ {
 						row = append(row, r.Float32()*2-1)
 					}
-					value, _ := goFeature.TByte(row)
+					value, _ := goFeature.TFeatureValue(row)
 					vec2 = append(vec2, value)
 				}
 				_, err := set.Search(0, 1, vec2...)
@@ -156,7 +156,7 @@ func main() {
 				for j := 0; j < Dimension; j++ {
 					value = append(value, r.Float32()*2-1)
 				}
-				feature.Value, _ = goFeature.TByte(value)
+				feature.Value, _ = goFeature.TFeatureValue(value)
 				feature.ID = goFeature.FeatureID(goFeature.GetRandomString(12))
 				vec1 = append(vec1, feature)
 				ids = append(ids, feature.ID)

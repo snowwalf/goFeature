@@ -8,8 +8,8 @@ import (
 
 var (
 	// buffer error
-	ErrBufferWriteOutofRange = errors.New("try to write to much data into buffer")
-	ErrBufferCopyOutofRange  = errors.New("try to copy to much data from source buffer")
+	ErrBufferWriteOutofRange = errors.New("try to write too much data into buffer")
+	ErrBufferCopyOutofRange  = errors.New("try to copy too much data from source buffer")
 	ErrBufferSliceOutofRange = errors.New("slice buffer out of range")
 	ErrInvalidBufferData     = errors.New("invalid buffer data")
 	ErrAllocateGPUBuffer     = errors.New("failed to allocate gpu buffer")

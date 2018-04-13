@@ -64,7 +64,7 @@ func (b *_Block) Insert(features ...Feature) (err error) {
 		return ErrBlockIsFull
 	}
 
-	vector, err := TByte(FeatureToFeatureValue1D(features...))
+	vector, err := TFeatureValue(FeatureToFeatureValue1D(features...))
 	if err != nil {
 		return
 	}
@@ -213,8 +213,10 @@ func (b *_Block) Search(inputBuffer, outputBuffer Buffer, batch, limit int) (ret
 		var result []FeatureSearchResult
 		indexes, scores := MaxNFloat32(vec3[i*height:(i+1)*height], limit)
 		for j, index := range indexes {
-			r := FeatureSearchResult{Score: FeatureScore(scores[j]), ID: b.IDs[index]}
-			result = append(result, r)
+			if b.IDs[index] != "" {
+				r := FeatureSearchResult{Score: FeatureScore(scores[j]), ID: b.IDs[index]}
+				result = append(result, r)
+			}
 		}
 		//result.Index, result.Score = b.IDs[index], score
 		ret = append(ret, result)

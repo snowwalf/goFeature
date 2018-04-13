@@ -1,5 +1,8 @@
 # goFeature
  golang library for feature search on cublas
+ **Limitation**
+ * Only support noramlized feature
+ * Only use cosine distance to compare vectors
 
 ## Dependency
 
