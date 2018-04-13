@@ -148,14 +148,14 @@ func (b *_Block) Delete(ids ...FeatureID) (deleted []FeatureID, err error) {
 
 // Update :
 // 	update N feature(s) in the block
-func (b *_Block) Update(features ...FeatureID) (updated []FeatureID, err error) {
+func (b *_Block) Update(features ...Feature) (updated []FeatureID, err error) {
 	// TODO
 	return
 }
 
 // Read :
 //  get features detail info from block
-func (b *_Block) Read(...FeatureID) (features []Feature, err error) {
+func (b *_Block) Read(ids ...FeatureID) (features []Feature, err error) {
 	// TODO
 	return
 }
