@@ -3,58 +3,36 @@
 package goFeature
 
 import (
-	"errors"
-	"fmt"
+	"sync"
 
 	"github.com/unixpickle/cuda"
+	"github.com/unixpickle/cuda/cublas"
 )
 
-type Cache struct {
-	Ctx         *cuda.Context
-	AllBlocks   []*Block
-	BlockSize   int
-	FeatureSets map[string]FeatureSet
+type _Cache struct {
+	Ctx       *cuda.Context
+	AllBlocks []Block
+	Allocator cuda.Allocator
+	BlockSize int
+	Mutex     sync.Mutex
+	Sets      map[string]Set
 }
 
-func (c *Cache) GetEmptyBlock(blockNum int) ([]*Block, error) {
-	var emptyBlocks []*Block
-	for _, block := range c.AllBlocks {
-		if len(block.Owner) == 0 {
-			emptyBlocks = append(emptyBlocks, block)
-		}
+func NewCache(ctx *cuda.Context, blockNum, blockSize int) (cache *_Cache, err error) {
+	cache = &_Cache{
+		Ctx:       ctx,
+		BlockSize: blockSize,
+		Sets:      make(map[string]Set, 0),
+		Allocator: cuda.GCAllocator(cuda.NativeAllocator(ctx), 0),
 	}
-	if len(emptyBlocks) < blockNum {
-		return nil, ErrNotEnoughBlocks
-	}
-	return emptyBlocks[:blockNum], nil
-}
-
-func (c *Cache) GetFeatureSets() map[string]FeatureSet {
-	return c.FeatureSets
-}
-
-func NewCache(ctx *cuda.Context, blockNum, blockSize int) (cache *Cache, err error) {
-	cache = &Cache{}
-	allocator := cuda.GCAllocator(cuda.NativeAllocator(ctx), 0)
-	var buffer cuda.Buffer
-	err = <-ctx.Run(func() (err error) {
-		buffer, err = cuda.AllocBuffer(allocator, uintptr(blockNum*blockSize))
-		if err != nil {
-			return errors.New("fail to allocate buffer " + fmt.Sprintf("%d*%d", blockNum, blockSize))
-		}
-		err = cuda.ClearBuffer(buffer)
-		if err != nil {
-			return errors.New("fail to clear buffer")
-		}
-		return nil
-	})
+	var buffer Buffer
+	buffer, err = NewGPUBuffer(ctx, cache.Allocator, blockNum*blockSize)
 	if err != nil {
-		err = ErrAllocatGPUMemory
 		return
 	}
 	for i := 0; i < blockNum; i++ {
-		slc := cuda.Slice(buffer, uintptr(i*blockSize), uintptr((i+1)*blockSize))
-		if slc == nil {
+		slc, e := buffer.Slice(i*blockSize, (i+1)*blockSize)
+		if e != nil || slc == nil {
 			err = ErrSliceGPUBuffer
 			return
 		}
@@ -62,24 +40,83 @@ func NewCache(ctx *cuda.Context, blockNum, blockSize int) (cache *Cache, err err
 		// block := Block{Index: i, BlockSize: blockSize, Length: 0, Buffer: slc, Dims: 0}
 		cache.AllBlocks = append(cache.AllBlocks, block)
 	}
-	cache.BlockSize = blockSize
-	cache.Ctx = ctx
-	cache.FeatureSets = make(map[string]FeatureSet, 0)
 	return
 }
 
-func (c *Cache) AccquireBuffer(size int) (buffer cuda.Buffer, err error) {
-	allocator := cuda.GCAllocator(cuda.NativeAllocator(c.Ctx), 0)
-	err = <-c.Ctx.Run(func() (err error) {
-		buffer, err = cuda.AllocBuffer(allocator, uintptr(size))
-		if err != nil {
-			return errors.New("fail to allocate buffer " + fmt.Sprintf("%d", size))
-		}
-		return nil
-	})
-	if err != nil {
-		err = ErrAllocatGPUMemory
+func (c *_Cache) NewSet(name string, dims, precision, batch int) (err error) {
+	c.Mutex.Lock()
+	if _, exist := c.Sets[name]; exist {
+		c.Mutex.Unlock()
+		return ErrFeatureSetExist
+	}
+	c.Mutex.Unlock()
+
+	set := &FeatureSet{
+		Context:         c.Ctx,
+		Dimension:       dims,
+		Precision:       precision,
+		BlockFeatureNum: c.BlockSize / (dims * precision),
+		Name:            name,
+		Batch:           batch,
+		Cache:           c,
+	}
+
+	if set.Handle, err = cublas.NewHandle(c.Ctx); err != nil {
 		return
 	}
+
+	if set.InputBuffer, err = NewGPUBuffer(c.Ctx, c.Allocator, batch*dims*precision); err != nil {
+		return err
+	}
+	if set.OutputBuffer, err = NewGPUBuffer(c.Ctx, c.Allocator, batch*set.BlockFeatureNum*precision); err != nil {
+		return err
+	}
+
+	c.Mutex.Lock()
+	defer c.Mutex.Unlock()
+	c.Sets[name] = set
 	return
+}
+
+func (c *_Cache) DestroySet(name string) (err error) {
+	c.Mutex.Lock()
+	set, exist := c.Sets[name]
+	if !exist {
+		c.Mutex.Unlock()
+		return ErrFeatureSetNotFound
+	}
+	c.Mutex.Unlock()
+
+	if err = set.Destroy(); err != nil {
+		return
+	}
+	c.Mutex.Lock()
+	defer c.Mutex.Unlock()
+	delete(c.Sets, name)
+	return
+}
+
+func (c *_Cache) GetSet(name string) (set Set, err error) {
+	c.Mutex.Lock()
+	defer c.Mutex.Unlock()
+	set, exist := c.Sets[name]
+	if !exist {
+		return nil, ErrFeatureSetNotFound
+	}
+	return
+}
+
+func (c *_Cache) GetBlockSize() int { return c.BlockSize }
+
+func (c *_Cache) GetEmptyBlock(blockNum int) ([]Block, error) {
+	var emptyBlocks []Block
+	for _, block := range c.AllBlocks {
+		if !block.IsOwned() {
+			emptyBlocks = append(emptyBlocks, block)
+		}
+	}
+	if len(emptyBlocks) < blockNum {
+		return nil, ErrNotEnoughBlocks
+	}
+	return emptyBlocks[:blockNum], nil
 }

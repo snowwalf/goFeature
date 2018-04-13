@@ -1,5 +1,8 @@
 # goFeature
  golang library for feature search on cublas
+ **Limitation**
+ * Only support noramlized feature
+ * Only use cosine distance to compare vectors
 
 ## Dependency
 
@@ -7,6 +10,11 @@
 go get github.com/unixpickle/cuda
 go get github.com/unixpickle/cuda/cublas
 ```
+
+## Documents
+* [unixpickle/cuda](https://godoc.org/github.com/unixpickle/cuda)
+* [unixpickle/cublas](https://godoc.org/github.com/unixpickle/cuda/cublas)
+
 
 ## Docker Compile Environment
 
@@ -18,3 +26,10 @@ docker exec -it <container_name> /bin/bash
 
 ## Build Demo
 go build -tags 'cublas'
+
+## Benchmark
+### Search Benchmark
+
+```
+ go test -tags 'cublas' -bench='BenchmarkSearch' -benchtime=3s -run=none
+```

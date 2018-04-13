@@ -3,48 +3,74 @@
 package goFeature
 
 import (
+	"math"
 	"math/rand"
+	"reflect"
 	"sort"
 	"time"
+	"unsafe"
 )
 
-func Float32Array2DTo1D(array [][]float32) (ret []float32) {
-	for _, row := range array {
-		ret = append(ret, row...)
-	}
-	return
-}
-
-func Float32FeautureTO1D(features []Feature) (ret []float32) {
+func FeatureToFeatureValue1D(features ...Feature) (ret FeatureValue) {
 	for _, feature := range features {
 		ret = append(ret, feature.Value...)
 	}
 	return
 }
 
-// 二维特征矩阵 转置成 一维列优先矩阵
-func TFloat32(vector [][]float32, col, row int) []float32 {
-	ret := make([]float32, col*row)
+func FeatureValueTranspose1D(precision int, features ...FeatureValue) (ret FeatureValue, err error) {
+	// little endian feature value
+	if len(features) == 0 {
+		return
+	}
+	if len(features[0])%precision != 0 {
+		return nil, ErrBadTransposeValue
+	}
+	col := len(features[0]) / precision
+	row := len(features)
+
+	ret = make(FeatureValue, col*row*precision)
 	for i := 0; i < col; i++ {
 		for j := 0; j < row; j++ {
-			ret[i*row+j] = vector[j][i]
+			copy(ret[(i*row+j)*precision:(i*row+j+1)*precision], features[j][i*precision:(i+1)*precision])
 		}
 	}
-	return ret
+	return
 }
 
-func MaxFloat32(vector []float32) (int, float32) {
-	var max float32
-	max = -99999.9
-	var index int
-	index = -1
-	for i, value := range vector {
-		if value > max {
-			index = i
-			max = value
-		}
+func TFeatureValue(value interface{}) (FeatureValue, error) {
+
+	switch value.(type) {
+	case FeatureValue:
+		return value.(FeatureValue), nil
+	case []byte:
+		return FeatureValue(value.([]byte)), nil
+	case []int16:
+		return *(*FeatureValue)(unsafe.Pointer(&reflect.SliceHeader{
+			Data: uintptr(unsafe.Pointer(&value.([]int16)[0])),
+			Len:  len(value.([]int16)) * 2,
+			Cap:  len(value.([]int16)) * 2,
+		})), nil
+	case []int32:
+		return *(*FeatureValue)(unsafe.Pointer(&reflect.SliceHeader{
+			Data: uintptr(unsafe.Pointer(&value.([]int32)[0])),
+			Len:  len(value.([]int32)) * 4,
+			Cap:  len(value.([]int32)) * 4,
+		})), nil
+	case []float32:
+		return *(*FeatureValue)(unsafe.Pointer(&reflect.SliceHeader{
+			Data: uintptr(unsafe.Pointer(&value.([]float32)[0])),
+			Len:  len(value.([]float32)) * 4,
+			Cap:  len(value.([]float32)) * 4,
+		})), nil
+	case []float64:
+		return *(*FeatureValue)(unsafe.Pointer(&reflect.SliceHeader{
+			Data: uintptr(unsafe.Pointer(&value.([]float64)[0])),
+			Len:  len(value.([]float64)) * 8,
+			Cap:  len(value.([]float64)) * 8,
+		})), nil
 	}
-	return index, max
+	return nil, ErrInvalidBufferData
 }
 
 func MaxNFloat32(vector []float32, limit int) ([]int, []float32) {
@@ -66,9 +92,9 @@ func MaxNFloat32(vector []float32, limit int) ([]int, []float32) {
 	return index, max
 }
 
-func MaxNFeatureResult(vector []FeatureResult, limit int) ([]int, []FeatureResult) {
+func MaxNFeatureResult(vector []FeatureSearchResult, limit int) ([]int, []FeatureSearchResult) {
 	type _result struct {
-		Value FeatureResult
+		Value FeatureSearchResult
 		Index int
 	}
 	var scores []_result
@@ -77,7 +103,7 @@ func MaxNFeatureResult(vector []FeatureResult, limit int) ([]int, []FeatureResul
 	}
 	sort.Slice(scores, func(i, j int) bool { return scores[i].Value.Score > scores[j].Value.Score })
 	var index []int
-	var max []FeatureResult
+	var max []FeatureSearchResult
 	for i := 0; i < limit && i < len(scores); i++ {
 		index = append(index, scores[i].Index)
 		max = append(max, scores[i].Value)
@@ -94,4 +120,20 @@ func GetRandomString(length int) string {
 		result = append(result, bytes[r.Intn(len(str))])
 	}
 	return string(result)
+}
+
+func NoramlizeFloat32(feature []float32) (ret []float32) {
+	var mode float32
+	for _, value := range feature {
+		mode += value * value
+	}
+	mode = float32(math.Pow(float64(mode), 0.5))
+	if mode == 0 {
+		return make([]float32, len(feature), len(feature))
+	}
+
+	for _, value := range feature {
+		ret = append(ret, value/mode)
+	}
+	return
 }
