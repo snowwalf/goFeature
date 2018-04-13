@@ -52,7 +52,9 @@ func (s *FeatureSet) Add(feautres ...Feature) (err error) {
 			length = remain
 		}
 		if length > 0 {
-			block.Insert(feautres[offset:(offset + length)]...)
+			if err = block.Insert(feautres[offset:(offset + length)]...); err != nil {
+				return
+			}
 			offset += length
 			remain -= length
 		}
@@ -63,7 +65,7 @@ func (s *FeatureSet) Add(feautres ...Feature) (err error) {
 	return
 }
 
-func (s *FeatureSet) Search(threshold float32, limit int, features ...FeatureValue) (ret [][]FeatureSearchResult, err error) {
+func (s *FeatureSet) Search(threshold FeatureScore, limit int, features ...FeatureValue) (ret [][]FeatureSearchResult, err error) {
 	batch := len(features)
 	if batch > s.Batch {
 		return nil, ErrOutOfBatch
@@ -86,7 +88,13 @@ func (s *FeatureSet) Search(threshold float32, limit int, features ...FeatureVal
 			return nil, e
 		}
 		for b, r := range result {
-			results[b] = append(results[b], r...)
+			var rr []FeatureSearchResult
+			for _, r1 := range r {
+				if r1.Score >= threshold {
+					rr = append(rr, r1)
+				}
+			}
+			results[b] = append(results[b], rr...)
 		}
 	}
 	for _, result := range results {

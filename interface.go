@@ -6,7 +6,7 @@ import "github.com/unixpickle/cuda/cublas"
 
 // Cache : interface of cache, the main object of features
 type Cache interface {
-	NewSet(string, int, int, int) error
+	NewSet(name string, dims int, precision int, batch int) error
 	DestroySet(string) error
 	GetSet(string) (Set, error)
 	GetBlockSize() int
@@ -21,7 +21,7 @@ type Set interface {
 	Read(...FeatureID) ([]Feature, error)
 	Destroy() error
 
-	Search(float32, int, ...FeatureValue) ([][]FeatureSearchResult, error)
+	Search(FeatureScore, int, ...FeatureValue) ([][]FeatureSearchResult, error)
 }
 
 // Block : interface of block, the basic scheuling unit

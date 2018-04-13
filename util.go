@@ -3,6 +3,7 @@
 package goFeature
 
 import (
+	"math"
 	"math/rand"
 	"reflect"
 	"sort"
@@ -37,31 +38,33 @@ func FeatureValueTranspose1D(precision int, features ...FeatureValue) (ret Featu
 	return
 }
 
-func TByte(value interface{}) ([]byte, error) {
+func TFeatureValue(value interface{}) (FeatureValue, error) {
 
 	switch value.(type) {
+	case FeatureValue:
+		return value.(FeatureValue), nil
 	case []byte:
-		return value.([]byte), nil
+		return FeatureValue(value.([]byte)), nil
 	case []int16:
-		return *(*[]byte)(unsafe.Pointer(&reflect.SliceHeader{
+		return *(*FeatureValue)(unsafe.Pointer(&reflect.SliceHeader{
 			Data: uintptr(unsafe.Pointer(&value.([]int16)[0])),
 			Len:  len(value.([]int16)) * 2,
 			Cap:  len(value.([]int16)) * 2,
 		})), nil
 	case []int32:
-		return *(*[]byte)(unsafe.Pointer(&reflect.SliceHeader{
+		return *(*FeatureValue)(unsafe.Pointer(&reflect.SliceHeader{
 			Data: uintptr(unsafe.Pointer(&value.([]int32)[0])),
 			Len:  len(value.([]int32)) * 4,
 			Cap:  len(value.([]int32)) * 4,
 		})), nil
 	case []float32:
-		return *(*[]byte)(unsafe.Pointer(&reflect.SliceHeader{
+		return *(*FeatureValue)(unsafe.Pointer(&reflect.SliceHeader{
 			Data: uintptr(unsafe.Pointer(&value.([]float32)[0])),
 			Len:  len(value.([]float32)) * 4,
 			Cap:  len(value.([]float32)) * 4,
 		})), nil
 	case []float64:
-		return *(*[]byte)(unsafe.Pointer(&reflect.SliceHeader{
+		return *(*FeatureValue)(unsafe.Pointer(&reflect.SliceHeader{
 			Data: uintptr(unsafe.Pointer(&value.([]float64)[0])),
 			Len:  len(value.([]float64)) * 8,
 			Cap:  len(value.([]float64)) * 8,
@@ -117,4 +120,20 @@ func GetRandomString(length int) string {
 		result = append(result, bytes[r.Intn(len(str))])
 	}
 	return string(result)
+}
+
+func NoramlizeFloat32(feature []float32) (ret []float32) {
+	var mode float32
+	for _, value := range feature {
+		mode += value * value
+	}
+	mode = float32(math.Pow(float64(mode), 0.5))
+	if mode == 0 {
+		return make([]float32, len(feature), len(feature))
+	}
+
+	for _, value := range feature {
+		ret = append(ret, value/mode)
+	}
+	return
 }
