@@ -8,6 +8,11 @@ go get github.com/unixpickle/cuda
 go get github.com/unixpickle/cuda/cublas
 ```
 
+## Documents
+* [unixpickle/cuda](https://godoc.org/github.com/unixpickle/cuda)
+* [unixpickle/cublas](https://godoc.org/github.com/unixpickle/cuda/cublas)
+
+
 ## Docker Compile Environment
 
 ```
