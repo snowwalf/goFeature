@@ -36,8 +36,7 @@ func NewCache(ctx *cuda.Context, blockNum, blockSize int) (cache *_Cache, err er
 			err = ErrSliceGPUBuffer
 			return
 		}
-		block := NewBlock(ctx, i, blockSize, slc)
-		// block := Block{Index: i, BlockSize: blockSize, Length: 0, Buffer: slc, Dims: 0}
+		block := NewBlock(ctx, cache.Allocator, i, blockSize, slc)
 		cache.AllBlocks = append(cache.AllBlocks, block)
 	}
 	return
@@ -59,17 +58,11 @@ func (c *_Cache) NewSet(name string, dims, precision, batch int) (err error) {
 		Name:            name,
 		Batch:           batch,
 		Cache:           c,
+		SearchQueue:     make(chan SearchJob, 10),
 	}
 
 	if set.Handle, err = cublas.NewHandle(c.Ctx); err != nil {
 		return
-	}
-
-	if set.InputBuffer, err = NewGPUBuffer(c.Ctx, c.Allocator, batch*dims*precision); err != nil {
-		return err
-	}
-	if set.OutputBuffer, err = NewGPUBuffer(c.Ctx, c.Allocator, batch*set.BlockFeatureNum*precision); err != nil {
-		return err
 	}
 
 	c.Mutex.Lock()

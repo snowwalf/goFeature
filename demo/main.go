@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/rand"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/snowwalf/goFeature"
@@ -15,20 +16,22 @@ import (
 
 const (
 	//BlockSize : size of feature block
-	BlockSize = 1024 * 1024 * 32
-	BlockNum  = 100
-	Dimension = 512
-	Batch     = 2
-	Precision = 4
-	Round     = 1
-	SetSize   = 2
-	SetNum    = 1
+	BlockSize      = 1024 * 1024 * 32
+	BlockNum       = 100
+	Dimension      = 512
+	Batch          = 2
+	Precision      = 4
+	Round          = 5000
+	SetSize        = 1000000
+	SetNum         = 1
+	SearchParallel = 5
 )
 
 var (
 	ctx      *cuda.Context
 	sets     []goFeature.Set
 	features [][]goFeature.FeatureID
+	delay    int64
 )
 
 func RandPickFeature(index int) (id goFeature.FeatureID, err error) {
@@ -114,29 +117,32 @@ func main() {
 	totalStart := time.Now()
 	for s := 0; s < SetNum; s++ {
 		wg.Add(1)
-		go func(index int) {
-			set := sets[index]
-			defer wg.Done()
+		for p := 0; p < SearchParallel; p++ {
+			go func(index, parallel int) {
+				set := sets[index]
+				defer wg.Done()
 
-			for b := 0; b < Round; b++ {
-				start := time.Now()
-				r := rand.New(rand.NewSource(time.Now().Unix()))
-				var vec2 []goFeature.FeatureValue
-				for i := 0; i < Batch; i++ {
-					var row []float32
-					for j := 0; j < Dimension; j++ {
-						row = append(row, r.Float32()*2-1)
+				for b := 0; b < Round; b++ {
+					start := time.Now()
+					r := rand.New(rand.NewSource(time.Now().Unix()))
+					var vec2 []goFeature.FeatureValue
+					for i := 0; i < Batch; i++ {
+						var row []float32
+						for j := 0; j < Dimension; j++ {
+							row = append(row, r.Float32()*2-1)
+						}
+						value, _ := goFeature.TFeatureValue(row)
+						vec2 = append(vec2, value)
 					}
-					value, _ := goFeature.TFeatureValue(row)
-					vec2 = append(vec2, value)
+					_, err := set.Search(0, 1, vec2...)
+					if err != nil {
+						fmt.Println("Fail to search feature, err:", err)
+					}
+					fmt.Println("SetNum:", index, "parallel:", parallel, "Round ", b, " duration:", time.Since(start))
+					atomic.AddInt64(&delay, int64(time.Since(start)))
 				}
-				_, err := set.Search(0, 1, vec2...)
-				if err != nil {
-					fmt.Println("Fail to search feature, err:", err)
-				}
-				fmt.Println("SetNum:", index, "Round ", b, " duration:", time.Since(start))
-			}
-		}(s)
+			}(s, p)
+		}
 	}
 
 	// aad new features
@@ -196,5 +202,6 @@ func main() {
 		wg.Done()
 	}()
 	wg.Wait()
+	fmt.Println("Average search delay:", time.Duration(delay/(SearchParallel*SetNum*Round)))
 	fmt.Println("Total search time:", time.Since(totalStart))
 }
