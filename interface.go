@@ -2,7 +2,11 @@
 
 package goFeature
 
-import "github.com/unixpickle/cuda/cublas"
+import (
+	"context"
+
+	"github.com/unixpickle/cuda/cublas"
+)
 
 // Cache : interface of cache, the main object of features
 type Cache interface {
@@ -77,7 +81,9 @@ type Block interface {
 	//  - owner: set name, unique
 	//  - dims: dimension of feature
 	//  - precision: precision of feature
-	Accquire(handle *cublas.Handle, owner string, dims int, premision int) error
+	//  - batch: batch limit of the set
+	//  - worker: search worker function of the set
+	Accquire(handle *cublas.Handle, owner string, dims int, premision int, batch int, worker func(context.Context, Buffer, Buffer)) error
 
 	// Release: release the accquired block
 	Release() error

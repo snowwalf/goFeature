@@ -3,6 +3,7 @@
 package goFeature
 
 import (
+	"context"
 	"errors"
 	"sync"
 
@@ -18,22 +19,30 @@ type _Block struct {
 	Mutex     sync.Mutex
 	Ctx       *cuda.Context
 	Handle    *cublas.Handle
+	Allocator cuda.Allocator
 
 	// feature info
 	Dims      int
 	Precision int
+	Batch     int
 	Owner     string
 	Empty     []int
 	NextIndex int
 	IDs       []FeatureID
+
+	// internal
+	jobCancle    context.CancelFunc
+	inputBuffer  Buffer
+	outputBuffer Buffer
 }
 
-func NewBlock(ctx *cuda.Context, index, blockSize int, buffer Buffer) Block {
+func NewBlock(ctx *cuda.Context, allocator cuda.Allocator, index, blockSize int, buffer Buffer) Block {
 	block := &_Block{
 		Index:     index,
 		BlockSize: blockSize,
 		Buffer:    buffer,
 		Ctx:       ctx,
+		Allocator: allocator,
 	}
 	return block
 }
@@ -47,7 +56,7 @@ func (b *_Block) Margin() int {
 	return len(b.Empty) + (length - b.NextIndex)
 }
 
-func (b *_Block) Accquire(handle *cublas.Handle, owner string, dims, precision int) (err error) {
+func (b *_Block) Accquire(handle *cublas.Handle, owner string, dims, precision, batch int, worker func(context.Context, Buffer, Buffer)) (err error) {
 	if b.Owner != "" {
 		return ErrBlockUsed
 	}
@@ -56,6 +65,15 @@ func (b *_Block) Accquire(handle *cublas.Handle, owner string, dims, precision i
 	b.Owner = owner
 	b.Handle = handle
 	b.IDs = make([]FeatureID, b.BlockSize/(precision*dims))
+	if b.inputBuffer, err = NewGPUBuffer(b.Ctx, b.Allocator, batch*dims*precision); err != nil {
+		return err
+	}
+	if b.outputBuffer, err = NewGPUBuffer(b.Ctx, b.Allocator, batch*(b.BlockSize/(dims*precision))*precision); err != nil {
+		return err
+	}
+	var ctx context.Context
+	ctx, b.jobCancle = context.WithCancel(context.Background())
+	go worker(ctx, b.inputBuffer, b.outputBuffer)
 	return
 }
 
@@ -235,6 +253,7 @@ func (b *_Block) Release() (err error) {
 		return ErrClearCudaBuffer
 	}
 
+	b.jobCancle()
 	b.Dims = 0
 	b.Precision = 0
 	b.Owner = ""

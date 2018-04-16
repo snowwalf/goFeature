@@ -3,11 +3,23 @@
 package goFeature
 
 import (
+	"context"
 	"sync"
 
 	"github.com/unixpickle/cuda"
 	"github.com/unixpickle/cuda/cublas"
 )
+
+type SearchJob struct {
+	Block
+	Features []FeatureValue
+	Batch    int
+	Limit    int
+	RetChan  chan struct {
+		Result [][]FeatureSearchResult
+		Err    error
+	}
+}
 
 type FeatureSet struct {
 	*cuda.Context
@@ -19,9 +31,47 @@ type FeatureSet struct {
 	Batch           int
 	Blocks          []Block
 	Cache           Cache
-	InputBuffer     Buffer
-	OutputBuffer    Buffer
+	InputBuffer     []Buffer
+	OutputBuffer    []Buffer
+	SearchQueue     chan SearchJob
 	SearchLock      sync.Mutex
+}
+
+func (s *FeatureSet) doSearch(ctx context.Context, inputBuffer, outputBuffer Buffer) {
+
+	var (
+		ret struct {
+			Result [][]FeatureSearchResult
+			Err    error
+		}
+	)
+
+	for {
+		select {
+		case job := <-s.SearchQueue:
+
+			var (
+				target FeatureValue
+				err    error
+			)
+			target, err = FeatureValueTranspose1D(s.Precision, job.Features...)
+			if err != nil {
+				ret.Err = err
+				job.RetChan <- ret
+			}
+
+			if err = inputBuffer.Write(target); err != nil {
+				ret.Err = ErrWriteInputBuffer
+				job.RetChan <- ret
+			}
+
+			ret.Result, ret.Err = job.Block.Search(inputBuffer, outputBuffer, job.Batch, job.Limit)
+			job.RetChan <- ret
+		case <-ctx.Done():
+			return
+		}
+	}
+
 }
 
 func (s *FeatureSet) Add(feautres ...Feature) (err error) {
@@ -40,7 +90,7 @@ func (s *FeatureSet) Add(feautres ...Feature) (err error) {
 			return
 		}
 		for _, block := range blocks {
-			block.Accquire(s.Handle, s.Name, s.Dimension, s.Precision)
+			block.Accquire(s.Handle, s.Name, s.Dimension, s.Precision, s.Batch, s.doSearch)
 		}
 		s.Blocks = append(s.Blocks, blocks...)
 	}
@@ -70,24 +120,27 @@ func (s *FeatureSet) Search(threshold FeatureScore, limit int, features ...Featu
 	if batch > s.Batch {
 		return nil, ErrOutOfBatch
 	}
-	var target FeatureValue
-	target, err = FeatureValueTranspose1D(s.Precision, features...)
-	if err != nil {
-		return
-	}
-	s.SearchLock.Lock()
-	defer s.SearchLock.Unlock()
-	if err = s.InputBuffer.Write(target); err != nil {
-		return nil, ErrWriteInputBuffer
-	}
 
 	results := make([][]FeatureSearchResult, batch)
+	retChan := make(chan struct {
+		Result [][]FeatureSearchResult
+		Err    error
+	}, len(s.Blocks))
 	for _, block := range s.Blocks {
-		result, e := block.Search(s.InputBuffer, s.OutputBuffer, batch, limit)
-		if e != nil {
-			return nil, e
+		s.SearchQueue <- SearchJob{
+			Block:    block,
+			Features: features,
+			Batch:    batch,
+			Limit:    limit,
+			RetChan:  retChan,
 		}
-		for b, r := range result {
+	}
+	for _, _ = range s.Blocks {
+		r := <-retChan
+		if r.Err != nil {
+			return nil, r.Err
+		}
+		for b, r := range r.Result {
 			var rr []FeatureSearchResult
 			for _, r1 := range r {
 				if r1.Score >= threshold {
@@ -97,6 +150,7 @@ func (s *FeatureSet) Search(threshold FeatureScore, limit int, features ...Featu
 			results[b] = append(results[b], rr...)
 		}
 	}
+	close(retChan)
 	for _, result := range results {
 		_, features := MaxNFeatureResult(result, limit)
 		ret = append(ret, features)
@@ -148,6 +202,8 @@ func (s *FeatureSet) Update(features ...Feature) (updated []FeatureID, err error
 func (s *FeatureSet) Destroy() (err error) {
 	s.SearchLock.Lock()
 	defer s.SearchLock.Unlock()
+
+	close(s.SearchQueue)
 
 	for _, block := range s.Blocks {
 		if err = block.Release(); err != nil {
