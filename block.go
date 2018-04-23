@@ -1,25 +1,17 @@
-// +build cublas
-
 package goFeature
 
 import (
-	"context"
-	"errors"
 	"sync"
-
-	"github.com/unixpickle/cuda"
-	"github.com/unixpickle/cuda/cublas"
+	"sync/atomic"
 )
 
-type _Block struct {
+type Block struct {
 	// block info
 	Index     int
+	Version   uintptr
 	BlockSize int
 	Buffer    Buffer
 	Mutex     sync.Mutex
-	Ctx       *cuda.Context
-	Handle    *cublas.Handle
-	Allocator cuda.Allocator
 
 	// feature info
 	Dims      int
@@ -31,53 +23,64 @@ type _Block struct {
 	IDs       []FeatureID
 
 	// internal
-	jobCancle    context.CancelFunc
-	inputBuffer  Buffer
-	outputBuffer Buffer
 }
 
-func NewBlock(ctx *cuda.Context, allocator cuda.Allocator, index, blockSize int, buffer Buffer) Block {
-	block := &_Block{
+func NewBlock(index, blockSize int) *Block {
+	block := &Block{
 		Index:     index,
 		BlockSize: blockSize,
-		Buffer:    buffer,
-		Ctx:       ctx,
-		Allocator: allocator,
+		Buffer:    NewCPUBuffer(blockSize),
 	}
 	return block
 }
 
-func (b *_Block) IsOwned() bool { return b.Owner != "" }
+// IsOwned : check if accquired
+func (b *Block) IsOwned() bool { return b.Owner != "" }
 
-func (b *_Block) Capacity() int { return b.BlockSize / (b.Precision * b.Dims) }
+// Capacity : get max feautre number of the block
+func (b *Block) Capacity() int { return b.BlockSize / (b.Precision * b.Dims) }
 
-func (b *_Block) Margin() int {
+// Margin : number of features can be inserted
+func (b *Block) Margin() int {
 	length := b.BlockSize / (b.Precision * b.Dims)
 	return len(b.Empty) + (length - b.NextIndex)
 }
 
-func (b *_Block) Accquire(handle *cublas.Handle, owner string, dims, precision, batch int, worker func(context.Context, Buffer, Buffer)) (err error) {
+// GetBuffer : get buffer in the block
+func (b *Block) GetBuffer() Buffer { return b.Buffer }
+
+// GetIDs : get feature id by the index
+func (b *Block) GetIDs(indexes ...int) (ids []FeatureID) {
+	for _, index := range indexes {
+		var id FeatureID
+		if index > 0 || index < b.NextIndex {
+			id = b.IDs[index]
+		}
+		ids = append(ids, id)
+	}
+	return
+}
+
+// Accquire : one set tries to accquire the block
+//  - owner: set name, unique
+//  - dims: dimension of feature
+//  - precision: precision of feature
+//  - batch: batch limit of the set
+func (b *Block) Accquire(owner string, dims, precision, batch int) (err error) {
 	if b.Owner != "" {
 		return ErrBlockUsed
 	}
 	b.Dims = dims
 	b.Precision = precision
 	b.Owner = owner
-	b.Handle = handle
+	b.Version = 0
 	b.IDs = make([]FeatureID, b.BlockSize/(precision*dims))
-	if b.inputBuffer, err = NewGPUBuffer(b.Ctx, b.Allocator, batch*dims*precision); err != nil {
-		return err
-	}
-	if b.outputBuffer, err = NewGPUBuffer(b.Ctx, b.Allocator, batch*(b.BlockSize/(dims*precision))*precision); err != nil {
-		return err
-	}
-	var ctx context.Context
-	ctx, b.jobCancle = context.WithCancel(context.Background())
-	go worker(ctx, b.inputBuffer, b.outputBuffer)
 	return
 }
 
-func (b *_Block) Insert(features ...Feature) (err error) {
+// Insert : insert features into the block
+//  - features: features to be inserted
+func (b *Block) Insert(features ...Feature) (err error) {
 	if len(features) > b.Margin() {
 		return ErrBlockIsFull
 	}
@@ -127,12 +130,14 @@ func (b *_Block) Insert(features ...Feature) (err error) {
 	} else {
 		b.Empty = b.Empty[len(features):]
 	}
+	atomic.AddUintptr(&b.Version, 1)
 	return
 }
 
-// Delete :
-// 	delete N feature(s) from block
-func (b *_Block) Delete(ids ...FeatureID) (deleted []FeatureID, err error) {
+// Delete : try to delete features by id
+//  - ids: feature id to be deleted
+//  - deleted: feature ids deleted after function calling, nil if no one found
+func (b *Block) Delete(ids ...FeatureID) (deleted []FeatureID, err error) {
 	targets := make(map[FeatureID]int, 0)
 	for _, id := range ids {
 		targets[id] = -1
@@ -161,96 +166,29 @@ func (b *_Block) Delete(ids ...FeatureID) (deleted []FeatureID, err error) {
 			deleted = append(deleted, id)
 		}
 	}
+	atomic.AddUintptr(&b.Version, 1)
 	return
 }
 
-// Update :
-// 	update N feature(s) in the block
-func (b *_Block) Update(features ...Feature) (updated []FeatureID, err error) {
+// Update : try to update features
+//  - features: feature to be deleted
+//  - updated: feature ids updated after function calling, nil if no one found
+func (b *Block) Update(features ...Feature) (updated []FeatureID, err error) {
+	// TODO
+	atomic.AddUintptr(&b.Version, 1)
+	return
+}
+
+// Read : try to read features by id
+//  - ids: feature id to be read
+//  - features: feature got after function calling, nil if no one found
+func (b *Block) Read(ids ...FeatureID) (features []Feature, err error) {
 	// TODO
 	return
 }
 
-// Read :
-//  get features detail info from block
-func (b *_Block) Read(ids ...FeatureID) (features []Feature, err error) {
-	// TODO
-	return
-}
-
-// Search :
-//	search N features(s) in the block
-//	empty block will return score=0 result
-func (b *_Block) Search(inputBuffer, outputBuffer Buffer, batch, limit int) (ret [][]FeatureSearchResult, err error) {
-	dimension := b.Dims
-	height := b.NextIndex
-	if height == 0 {
-		return
-	}
-
-	vec3 := make([]float32, height*batch)
-	err = <-b.Ctx.Run(func() (e error) {
-		var alpha, beta float32
-		alpha = 1.0
-		beta = 0.0
-		e = b.Handle.Sgemm(
-			cublas.NoTrans,
-			cublas.NoTrans,
-			batch,
-			height,
-			dimension,
-			&alpha,
-			inputBuffer.GetBuffer().(cuda.Buffer),
-			batch,
-			b.Buffer.GetBuffer().(cuda.Buffer),
-			dimension,
-			&beta,
-			outputBuffer.GetBuffer().(cuda.Buffer),
-			batch,
-		)
-		if e != nil {
-			return
-		}
-		e = cuda.ReadBuffer(vec3, outputBuffer.GetBuffer().(cuda.Buffer))
-		if e != nil {
-			return errors.New("fail to read buffer vec3, err:" + e.Error())
-		}
-		for i := 0; i < batch; i++ {
-			slc, err := outputBuffer.Slice(i*height*b.Precision, (i+1)*height*b.Precision)
-			if slc == nil || err != nil {
-				e = ErrSliceBuffer
-				return
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		return
-	}
-	//  Trans result
-	for i := 0; i < batch; i++ {
-		var vec []float32
-		for j := 0; j < height; j++ {
-			vec = append(vec, vec3[j*batch+i])
-		}
-		var result []FeatureSearchResult
-		indexes, scores := MaxNFloat32(vec, limit)
-		for j, index := range indexes {
-			if b.IDs[index] != "" {
-				r := FeatureSearchResult{Score: FeatureScore(scores[j]), ID: b.IDs[index]}
-				result = append(result, r)
-			}
-		}
-		//result.Index, result.Score = b.IDs[index], score
-		ret = append(ret, result)
-	}
-
-	return
-}
-
-// Release :
-// 	release the whole block and clear the memory
-func (b *_Block) Release() (err error) {
+// Release : release the accquired block
+func (b *Block) Release() (err error) {
 	b.Mutex.Lock()
 	defer b.Mutex.Unlock()
 
@@ -258,13 +196,13 @@ func (b *_Block) Release() (err error) {
 		return ErrClearCudaBuffer
 	}
 
-	b.jobCancle()
 	b.Dims = 0
 	b.Precision = 0
 	b.Owner = ""
 	b.IDs = make([]FeatureID, 0)
 	b.Empty = make([]int, 0)
 	b.NextIndex = 0
+	b.Version = 0
 
 	return
 }

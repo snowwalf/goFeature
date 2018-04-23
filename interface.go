@@ -1,15 +1,12 @@
-// +build cublas
-
 package goFeature
 
-import (
-	"context"
+// Interface : user interface of goFeature manager
+type Interface interface {
 
-	"github.com/unixpickle/cuda/cublas"
-)
+	// ----------------------------------------------------------------------------------- //
+	// Interfaces of Set                                                                   //
+	// ----------------------------------------------------------------------------------- //
 
-// Cache : interface of cache, the main object of features
-type Cache interface {
 	// NewSet: create set
 	//  - name: set name, unique
 	//  - dims: dimension of feature
@@ -21,99 +18,49 @@ type Cache interface {
 	//	- name: set name, unique
 	DestroySet(name string) error
 
-	// GetSet: get set by name
-	//	- name: set name, unique
-	GetSet(name string) (Set, error)
+	// GetSet: read the set info
+	//  - name: set name, unique
+	GetSet(name string) (dimesion, precision, batch int, err error)
 
-	// GetBlockSize: get the blocksize of linked blocks
-	GetBlockSize() int
+	// UpdateSet: update set config, only batch is available
+	//  - name: set name, unique
+	//  - batch: new batch size
+	UpdateSet(name string, batch int) error
 
-	// GetEmptyBlock: try to get blocks which not accquired
-	//  - blocknum: block number to be accquired
-	GetEmptyBlock(blocknum int) ([]Block, error)
-}
+	// ----------------------------------------------------------------------------------- //
+	// Interfaces of Feature                                                               //
+	// ----------------------------------------------------------------------------------- //
 
-// Set : interface of set
-type Set interface {
-	// Add: add features to set
+	// AddFeature: add features to set
+	//  - name: set name, unique
 	// 	- features: features to be added
-	Add(features ...Feature) error
+	AddFeature(name string, features ...Feature) error
 
-	// Delete: try to delete features by id
+	// DeleteFeature: try to delete features by id
+	//  - name: set name, unique
 	//  - ids: feature id to be deleted
 	//  - deleted: feature ids deleted after function calling, nil if no one found
-	Delete(ids ...FeatureID) (deleted []FeatureID, err error)
+	DeleteFeature(name string, ids ...FeatureID) (deleted []FeatureID, err error)
 
-	// Update: try to update features
+	// UpdateFeature: try to update features
+	//  - name: set name, unique
 	//  - features: feature to be deleted
 	//  - updated: feature ids updated after function calling, nil if no one found
-	Update(features ...Feature) (updated []FeatureID, err error)
+	UpdateFeature(name string, features ...Feature) (updated []FeatureID, err error)
 
-	// Read: try to read features by id
+	// ReadFeautre: try to read features by id
+	//  - name: set name, unique
 	//  - ids: feature id to be read
 	//  - features: feature got after function calling, nil if no one found
-	Read(ids ...FeatureID) (features []Feature, err error)
-
-	// Destroy: destroy the set, release all the blocks accquired
-	Destroy() error
+	ReadFeautre(name string, ids ...FeatureID) (features []Feature, err error)
 
 	// Search: search targe features
+	//  - name: set name, unique
 	//  - threshold: score threshold for search
 	//	- limit: top N result
 	//	- features: target features value
 	//	- ret: search results
-	Search(threshold FeatureScore, limit int, features ...FeatureValue) (ret [][]FeatureSearchResult, err error)
-}
-
-// Block : interface of block, the basic scheuling unit
-type Block interface {
-	// Capacity: get max feautre number of the block
-	Capacity() int
-
-	// Margin: number of features can be inserted
-	Margin() int
-
-	// IsOwned: check if accquired
-	IsOwned() bool
-
-	// Accquire: one set tries to accquire the block
-	//  - handle: cublas handle created by set
-	//  - owner: set name, unique
-	//  - dims: dimension of feature
-	//  - precision: precision of feature
-	//  - batch: batch limit of the set
-	//  - worker: search worker function of the set
-	Accquire(handle *cublas.Handle, owner string, dims int, premision int, batch int, worker func(context.Context, Buffer, Buffer)) error
-
-	// Release: release the accquired block
-	Release() error
-
-	// Insert: insert features into the block
-	//  - features: features to be inserted
-	Insert(features ...Feature) error
-
-	// Delete: try to delete features by id
-	//  - ids: feature id to be deleted
-	//  - deleted: feature ids deleted after function calling, nil if no one found
-	Delete(...FeatureID) (deleted []FeatureID, err error)
-
-	// Update: try to update features
-	//  - features: feature to be deleted
-	//  - updated: feature ids updated after function calling, nil if no one found
-	Update(features ...Feature) (updated []FeatureID, err error)
-
-	// Read: try to read features by id
-	//  - ids: feature id to be read
-	//  - features: feature got after function calling, nil if no one found
-	Read(ids ...FeatureID) (features []Feature, err error)
-
-	// Search: search targe features
-	//  - inputBuffer: buffer stored target features value
-	//  - outputBuffer: buffer to store search result, temporary
-	//  - batch: max search batch size
-	//	- limit: top N result
-	//	- ret: search results
-	Search(inputBuffer, outputBuffer Buffer, batch int, limit int) (ret [][]FeatureSearchResult, err error)
+	Search(name string, threshold FeatureScore, limit int, features ...FeatureValue) (ret [][]FeatureSearchResult, err error)
 }
 
 // Buffer : buffer in memory for both CPU and GPU

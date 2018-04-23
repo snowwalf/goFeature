@@ -31,14 +31,15 @@ docker exec -it <container_name> /bin/bash
 ## Build Demo
 go build -tags 'cublas'
 
-## Benchmark
-### Search Benchmark
+## Test
+### Func Test
 
 ```
- go test -tags 'cublas' -bench='BenchmarkSearch' -benchtime=3s -run=none
+ go test -tags 'cublas' .
 ```
 
-### Result
+## Performance
+### Benchmark
 > Test on NVIDIA P4, 512
 
 |feature number|parallel|GPU load|average delay|QPS|
