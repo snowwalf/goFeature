@@ -3,6 +3,7 @@
 package goFeature
 
 import (
+	"context"
 	"errors"
 	"sync"
 
@@ -18,22 +19,30 @@ type _Block struct {
 	Mutex     sync.Mutex
 	Ctx       *cuda.Context
 	Handle    *cublas.Handle
+	Allocator cuda.Allocator
 
 	// feature info
 	Dims      int
 	Precision int
+	Batch     int
 	Owner     string
 	Empty     []int
 	NextIndex int
 	IDs       []FeatureID
+
+	// internal
+	jobCancle    context.CancelFunc
+	inputBuffer  Buffer
+	outputBuffer Buffer
 }
 
-func NewBlock(ctx *cuda.Context, index, blockSize int, buffer Buffer) Block {
+func NewBlock(ctx *cuda.Context, allocator cuda.Allocator, index, blockSize int, buffer Buffer) Block {
 	block := &_Block{
 		Index:     index,
 		BlockSize: blockSize,
 		Buffer:    buffer,
 		Ctx:       ctx,
+		Allocator: allocator,
 	}
 	return block
 }
@@ -47,7 +56,7 @@ func (b *_Block) Margin() int {
 	return len(b.Empty) + (length - b.NextIndex)
 }
 
-func (b *_Block) Accquire(handle *cublas.Handle, owner string, dims, precision int) (err error) {
+func (b *_Block) Accquire(handle *cublas.Handle, owner string, dims, precision, batch int, worker func(context.Context, Buffer, Buffer)) (err error) {
 	if b.Owner != "" {
 		return ErrBlockUsed
 	}
@@ -56,6 +65,15 @@ func (b *_Block) Accquire(handle *cublas.Handle, owner string, dims, precision i
 	b.Owner = owner
 	b.Handle = handle
 	b.IDs = make([]FeatureID, b.BlockSize/(precision*dims))
+	if b.inputBuffer, err = NewGPUBuffer(b.Ctx, b.Allocator, batch*dims*precision); err != nil {
+		return err
+	}
+	if b.outputBuffer, err = NewGPUBuffer(b.Ctx, b.Allocator, batch*(b.BlockSize/(dims*precision))*precision); err != nil {
+		return err
+	}
+	var ctx context.Context
+	ctx, b.jobCancle = context.WithCancel(context.Background())
+	go worker(ctx, b.inputBuffer, b.outputBuffer)
 	return
 }
 
@@ -148,14 +166,14 @@ func (b *_Block) Delete(ids ...FeatureID) (deleted []FeatureID, err error) {
 
 // Update :
 // 	update N feature(s) in the block
-func (b *_Block) Update(features ...FeatureID) (updated []FeatureID, err error) {
+func (b *_Block) Update(features ...Feature) (updated []FeatureID, err error) {
 	// TODO
 	return
 }
 
 // Read :
 //  get features detail info from block
-func (b *_Block) Read(...FeatureID) (features []Feature, err error) {
+func (b *_Block) Read(ids ...FeatureID) (features []Feature, err error) {
 	// TODO
 	return
 }
@@ -170,25 +188,25 @@ func (b *_Block) Search(inputBuffer, outputBuffer Buffer, batch, limit int) (ret
 		return
 	}
 
-	vec3 := make([]float32, height*batch*b.Precision)
+	vec3 := make([]float32, height*batch)
 	err = <-b.Ctx.Run(func() (e error) {
 		var alpha, beta float32
 		alpha = 1.0
 		beta = 0.0
 		e = b.Handle.Sgemm(
-			cublas.Trans,
 			cublas.NoTrans,
-			height,
+			cublas.NoTrans,
 			batch,
+			height,
 			dimension,
 			&alpha,
-			b.Buffer.GetBuffer().(cuda.Buffer),
-			dimension,
 			inputBuffer.GetBuffer().(cuda.Buffer),
+			batch,
+			b.Buffer.GetBuffer().(cuda.Buffer),
 			dimension,
 			&beta,
 			outputBuffer.GetBuffer().(cuda.Buffer),
-			height,
+			batch,
 		)
 		if e != nil {
 			return
@@ -209,9 +227,14 @@ func (b *_Block) Search(inputBuffer, outputBuffer Buffer, batch, limit int) (ret
 	if err != nil {
 		return
 	}
+	//  Trans result
 	for i := 0; i < batch; i++ {
+		var vec []float32
+		for j := 0; j < height; j++ {
+			vec = append(vec, vec3[j*batch+i])
+		}
 		var result []FeatureSearchResult
-		indexes, scores := MaxNFloat32(vec3[i*height:(i+1)*height], limit)
+		indexes, scores := MaxNFloat32(vec, limit)
 		for j, index := range indexes {
 			if b.IDs[index] != "" {
 				r := FeatureSearchResult{Score: FeatureScore(scores[j]), ID: b.IDs[index]}
@@ -235,6 +258,7 @@ func (b *_Block) Release() (err error) {
 		return ErrClearCudaBuffer
 	}
 
+	b.jobCancle()
 	b.Dims = 0
 	b.Precision = 0
 	b.Owner = ""

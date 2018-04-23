@@ -98,13 +98,22 @@ func TestBasicSearch(t *testing.T) {
 	if err = set.Add(f1, f2); err != nil {
 		panic(fmt.Sprint("Fail to fill feature set, due to:", err))
 	}
-
 	// search f1
 	if ret, err = set.Search(0, 1, f1.Value); err != nil {
 		panic(fmt.Sprint("Fail to fill search feature, due to:", err))
 	}
 	if len(ret) != 1 || len(ret[0]) != 1 || ret[0][0].ID != f1.ID || ret[0][0].Score < 0.999999 {
 		panic(fmt.Sprint("Fail to search feature got wrong target, ret:", ret))
+	}
+
+	v3 := make([]FeatureValue, 0)
+	v3 = append(v3, f1.Value)
+	v3 = append(v3, f2.Value)
+	if ret, err = set.Search(-1, 5, v3...); err != nil {
+		panic(fmt.Sprint("Fail to fill search multi-features, due to:", err))
+	}
+	if len(ret) != 2 || len(ret[0]) != 2 || len(ret[1]) != 2 || ret[0][0].Score < 0.999999 || ret[0][0].ID != f1.ID || ret[1][0].Score < 0.999999 || ret[1][0].ID != f2.ID {
+		panic(fmt.Sprint("Fail to fill search multi-features got wrong targed, ret:", ret))
 	}
 
 	// search f1, limit=2
