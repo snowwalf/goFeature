@@ -188,25 +188,25 @@ func (b *_Block) Search(inputBuffer, outputBuffer Buffer, batch, limit int) (ret
 		return
 	}
 
-	vec3 := make([]float32, height*batch*b.Precision)
+	vec3 := make([]float32, height*batch)
 	err = <-b.Ctx.Run(func() (e error) {
 		var alpha, beta float32
 		alpha = 1.0
 		beta = 0.0
 		e = b.Handle.Sgemm(
-			cublas.Trans,
 			cublas.NoTrans,
-			height,
+			cublas.NoTrans,
 			batch,
+			height,
 			dimension,
 			&alpha,
-			b.Buffer.GetBuffer().(cuda.Buffer),
-			dimension,
 			inputBuffer.GetBuffer().(cuda.Buffer),
+			batch,
+			b.Buffer.GetBuffer().(cuda.Buffer),
 			dimension,
 			&beta,
 			outputBuffer.GetBuffer().(cuda.Buffer),
-			height,
+			batch,
 		)
 		if e != nil {
 			return
@@ -227,9 +227,14 @@ func (b *_Block) Search(inputBuffer, outputBuffer Buffer, batch, limit int) (ret
 	if err != nil {
 		return
 	}
+	//  Trans result
 	for i := 0; i < batch; i++ {
+		var vec []float32
+		for j := 0; j < height; j++ {
+			vec = append(vec, vec3[j*batch+i])
+		}
 		var result []FeatureSearchResult
-		indexes, scores := MaxNFloat32(vec3[i*height:(i+1)*height], limit)
+		indexes, scores := MaxNFloat32(vec, limit)
 		for j, index := range indexes {
 			if b.IDs[index] != "" {
 				r := FeatureSearchResult{Score: FeatureScore(scores[j]), ID: b.IDs[index]}
