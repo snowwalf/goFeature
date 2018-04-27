@@ -13,24 +13,23 @@ import (
 
 const (
 	//BlockSize : size of feature block
-	BlockSize      = 1024 * 1024 * 32
-	BlockNum       = 100
-	GPUBlockNum    = 50
-	Dimension      = 512
-	Batch          = 5
-	Precision      = 4
-	Round          = 500
-	SetSize        = 500000
-	SetNum         = 1
-	SearchParallel = 1
-	InitParallel   = 10
+	BlockSize    = 1024 * 1024 * 16
+	BlockNum     = 200
+	GPUBlockNum  = 125
+	Dimension    = 512
+	Precision    = 4
+	Round        = 100
+	SetSize      = 8192 * 125
+	SetNum       = 1
+	InitParallel = 10
+	Batch        = 10
 )
 
 var (
-	//ids      [][]goFeature.FeatureID
-	sets     []string
-	features [][]goFeature.FeatureID
-	delay    int64
+	SearchParallel = 1
+	sets           []string
+	features       [][]goFeature.FeatureID
+	delay          int64
 )
 
 func RandPickFeature(index int) (id goFeature.FeatureID, err error) {
@@ -42,7 +41,7 @@ func RandPickFeature(index int) (id goFeature.FeatureID, err error) {
 
 func main() {
 	ctx := context.Background()
-	mgr, err := goFeature.NewManager(ctx, 2, BlockSize*GPUBlockNum, BlockNum, BlockSize)
+	mgr, err := goFeature.NewManager(ctx, 3, BlockSize*GPUBlockNum, BlockNum, BlockSize)
 	if err != nil {
 		fmt.Println("Fail to create manager, due to:", err)
 		return
@@ -114,38 +113,47 @@ func main() {
 		fmt.Printf("Init feature database for set (%d), use time %v \n", i, time.Since(start))
 	}
 
-	totalStart := time.Now()
-	for s := 0; s < SetNum; s++ {
-		wg.Add(1)
-		for p := 0; p < SearchParallel; p++ {
-			go func(index, parallel int) {
-				set := sets[index]
-				defer wg.Done()
+	for t := 0; t < 10; t++ {
+		SearchParallel = t + 1
+		totalStart := time.Now()
+		delay = 0
+		for s := 0; s < SetNum; s++ {
+			for p := 0; p < SearchParallel; p++ {
+				wg.Add(1)
+				go func(index, parallel int) {
+					set := sets[index]
+					defer wg.Done()
 
-				for b := 0; b < Round; b++ {
-					start := time.Now()
-					r := rand.New(rand.NewSource(time.Now().Unix()))
-					var vec2 []goFeature.FeatureValue
-					for i := 0; i < Batch; i++ {
-						var row []float32
-						for j := 0; j < Dimension; j++ {
-							row = append(row, r.Float32()*2-1)
+					for b := 0; b < Round; b++ {
+						start := time.Now()
+						r := rand.New(rand.NewSource(time.Now().Unix()))
+						var vec2 []goFeature.FeatureValue
+						for i := 0; i < Batch; i++ {
+							var row []float32
+							for j := 0; j < Dimension; j++ {
+								row = append(row, r.Float32()*2-1)
+							}
+							value, _ := goFeature.TFeatureValue(row)
+							vec2 = append(vec2, value)
 						}
-						value, _ := goFeature.TFeatureValue(row)
-						vec2 = append(vec2, value)
+						_, err := mgr.Search(set, -1, 1, vec2...)
+						if err != nil {
+							fmt.Println("Fail to search feature, err:", err)
+						}
+						//fmt.Println("t:", t, "SetNum:", index, "parallel:", parallel, "Round ", b, " duration:", time.Since(start))
+						atomic.AddInt64(&delay, int64(time.Since(start)))
 					}
-					_, err := mgr.Search(set, 0, 1, vec2...)
-					if err != nil {
-						fmt.Println("Fail to search feature, err:", err)
-					}
-					fmt.Println("SetNum:", index, "parallel:", parallel, "Round ", b, " duration:", time.Since(start))
-					atomic.AddInt64(&delay, int64(time.Since(start)))
-				}
-			}(s, p)
+				}(s, p)
+			}
 		}
+		wg.Wait()
+		fmt.Println("SearchParallel:", SearchParallel,
+			"delay:", time.Duration(delay/int64(SearchParallel*SetNum*Round)),
+			"QPS:", float64(Round*SearchParallel*SetNum*Batch)/(time.Since(totalStart).Seconds()),
+			"Total search time:", time.Since(totalStart))
 	}
 
-	// aad new features
+	//aad new features
 	wg.Add(1)
 	go func() {
 		for i := 0; i < 50; i++ {
@@ -202,7 +210,4 @@ func main() {
 		wg.Done()
 	}()
 	wg.Wait()
-	fmt.Println("Average search delay:", time.Duration(delay/(SearchParallel*SetNum*Round)))
-	fmt.Println("Total search time:", time.Since(totalStart))
-	fmt.Println("QPS:", float64(Round*SearchParallel*SetNum*Batch)/(time.Since(totalStart).Seconds()))
 }
