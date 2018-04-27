@@ -1,5 +1,3 @@
-// +build cublas
-
 package goFeature
 
 import (

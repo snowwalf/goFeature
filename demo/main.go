@@ -1,9 +1,7 @@
-// +build cublas
-
 package main
 
 import (
-	"errors"
+	"context"
 	"fmt"
 	"math/rand"
 	"sync"
@@ -11,34 +9,31 @@ import (
 	"time"
 
 	"github.com/snowwalf/goFeature"
-	"github.com/unixpickle/cuda"
 )
 
 const (
 	//BlockSize : size of feature block
 	BlockSize      = 1024 * 1024 * 32
 	BlockNum       = 100
+	GPUBlockNum    = 50
 	Dimension      = 512
-	Batch          = 2
+	Batch          = 5
 	Precision      = 4
-	Round          = 5000
-	SetSize        = 1000000
+	Round          = 500
+	SetSize        = 500000
 	SetNum         = 1
-	SearchParallel = 5
+	SearchParallel = 1
+	InitParallel   = 10
 )
 
 var (
-	ctx      *cuda.Context
-	sets     []goFeature.Set
+	//ids      [][]goFeature.FeatureID
+	sets     []string
 	features [][]goFeature.FeatureID
 	delay    int64
 )
 
 func RandPickFeature(index int) (id goFeature.FeatureID, err error) {
-	if len(sets) < index {
-		err = errors.New("RandPickFeature: index is out of bound")
-		return
-	}
 	ids := features[index]
 	random := rand.New(rand.NewSource(time.Now().UnixNano()))
 	id = ids[random.Intn(len(ids))]
@@ -46,74 +41,79 @@ func RandPickFeature(index int) (id goFeature.FeatureID, err error) {
 }
 
 func main() {
-	devices, err := cuda.AllDevices()
+	ctx := context.Background()
+	mgr, err := goFeature.NewManager(ctx, 2, BlockSize*GPUBlockNum, BlockNum, BlockSize)
 	if err != nil {
-		// Handle error.
-	}
-	if len(devices) == 0 {
-		// No devices found.
-	}
-	ctx, err = cuda.NewContext(devices[0], -1)
-	if err != nil {
-		fmt.Println("Fail to create context, due to", err)
+		fmt.Println("Fail to create manager, due to:", err)
 		return
 	}
-	totalMem, err := devices[0].TotalMem()
-	if BlockNum*BlockSize > totalMem {
-		err = goFeature.ErrTooMuchGPUMemory
-		return
-	}
+
 	var (
-		cache goFeature.Cache
+		wg  sync.WaitGroup
+		mut sync.Mutex
 	)
-
-	cache, err = goFeature.NewCache(ctx, BlockNum, BlockSize)
-	if err != nil {
-		fmt.Println("Fail to init blocks, due to:", err)
-		return
-	}
-
 	for i := 0; i < SetNum; i++ {
 		var ids []goFeature.FeatureID
 		name := fmt.Sprintf("test%d", i)
-		err := cache.NewSet(name, Dimension, Precision, Batch)
+		err := mgr.NewSet(name, Dimension, Precision, Batch)
 		if err != nil {
 			fmt.Println("Fail to init feature set, due to:", err)
 			return
 		}
-
-		r := rand.New(rand.NewSource(time.Now().Unix()))
-		vec1 := make([]goFeature.Feature, 0)
-		for i := 0; i < SetSize; i++ {
-			var (
-				values  []float32
-				feature goFeature.Feature
-			)
-			for j := 0; j < Dimension; j++ {
-				values = append(values, r.Float32()*2-1)
-			}
-			feature.Value, _ = goFeature.TFeatureValue(values)
-			feature.ID = goFeature.FeatureID(goFeature.GetRandomString(12))
-			vec1 = append(vec1, feature)
-			ids = append(ids, feature.ID)
-		}
 		start := time.Now()
-		set, err := cache.GetSet(name)
-		if err != nil {
-			fmt.Println("Fail to get feature set", name, ", error:", err)
-			return
+
+		for k := 0; k < InitParallel; k++ {
+			wg.Add(1)
+			go func(size int) {
+				r := rand.New(rand.NewSource(time.Now().Unix()))
+				var (
+					values  []float32
+					feature goFeature.Feature
+				)
+				for j := 0; j < Dimension; j++ {
+					values = append(values, r.Float32()*2-1)
+				}
+				feature.Value, _ = goFeature.TFeatureValue(values)
+				feature.ID = goFeature.FeatureID(goFeature.GetRandomString(12))
+				vec1 := make([]goFeature.Feature, 0)
+				for i := 0; i < 1024; i++ {
+					vec1 = append(vec1, feature)
+					ids = append(ids, feature.ID)
+				}
+				for size > 1024 {
+					err = mgr.AddFeature(name, vec1...)
+					if err != nil {
+						fmt.Println("Fail to fill feature set, due to:", err)
+						return
+					}
+
+					mut.Lock()
+					sets = append(sets, name)
+					features = append(features, ids)
+					mut.Unlock()
+					size -= 1024
+				}
+				if size > 0 {
+					err = mgr.AddFeature(name, vec1[:size]...)
+					if err != nil {
+						fmt.Println("Fail to fill feature set, due to:", err)
+						return
+					}
+
+					mut.Lock()
+					sets = append(sets, name)
+					features = append(features, ids)
+					size -= 1024
+					mut.Unlock()
+				}
+				wg.Done()
+			}(SetSize / InitParallel)
 		}
-		err = set.Add(vec1...)
-		if err != nil {
-			fmt.Println("Fail to fill feature set, due to:", err)
-			return
-		}
-		sets = append(sets, set)
-		features = append(features, ids)
+
+		wg.Wait()
 		fmt.Printf("Init feature database for set (%d), use time %v \n", i, time.Since(start))
 	}
 
-	var wg sync.WaitGroup
 	totalStart := time.Now()
 	for s := 0; s < SetNum; s++ {
 		wg.Add(1)
@@ -134,7 +134,7 @@ func main() {
 						value, _ := goFeature.TFeatureValue(row)
 						vec2 = append(vec2, value)
 					}
-					_, err := set.Search(0, 1, vec2...)
+					_, err := mgr.Search(set, 0, 1, vec2...)
 					if err != nil {
 						fmt.Println("Fail to search feature, err:", err)
 					}
@@ -169,7 +169,7 @@ func main() {
 			}
 			start := time.Now()
 			sets = append(sets, set)
-			err = set.Add(vec1...)
+			err = mgr.AddFeature(set, vec1...)
 			if err != nil {
 				fmt.Println("Fail to fill feature set, due to:", err)
 				return
@@ -192,7 +192,7 @@ func main() {
 			}
 			ids := []goFeature.FeatureID{id}
 			start := time.Now()
-			deleted, err := set.Delete(ids...)
+			deleted, err := mgr.DeleteFeature(set, ids...)
 			if err != nil {
 				fmt.Println("Fail to delete feature ", id, ", err: ", err)
 			}
@@ -204,4 +204,5 @@ func main() {
 	wg.Wait()
 	fmt.Println("Average search delay:", time.Duration(delay/(SearchParallel*SetNum*Round)))
 	fmt.Println("Total search time:", time.Since(totalStart))
+	fmt.Println("QPS:", float64(Round*SearchParallel*SetNum*Batch)/(time.Since(totalStart).Seconds()))
 }
