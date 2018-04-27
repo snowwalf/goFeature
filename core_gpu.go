@@ -40,7 +40,7 @@ func initCuda(gpuID, gpuMemSize int) (Buffer, error) {
 	if err != nil {
 		return nil, errors.New("fail to get the total mem of gpu " + strconv.Itoa(gpuID))
 	}
-	if float64(totalMem)*0.8 < float64(gpuMemSize) {
+	if float64(totalMem)*0.95 < float64(gpuMemSize) {
 		return nil, errors.New("try to allocate too much gpu mem, only " + strconv.FormatUint(totalMem, 10) + "B*0.8 can be used")
 	}
 
