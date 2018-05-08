@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -13,16 +14,16 @@ import (
 
 const (
 	//BlockSize : size of feature block
-	BlockSize    = 1024 * 1024 * 16
+	BlockSize    = 1024 * 1024 * 32
 	BlockNum     = 200
-	GPUBlockNum  = 125
+	GPUBlockNum  = 40
 	Dimension    = 512
 	Precision    = 4
 	Round        = 100
-	SetSize      = 8192 * 125
+	SetSize      = 16 * 1024 * 200
 	SetNum       = 1
 	InitParallel = 10
-	Batch        = 10
+	Batch        = 1
 )
 
 var (
@@ -41,7 +42,7 @@ func RandPickFeature(index int) (id goFeature.FeatureID, err error) {
 
 func main() {
 	ctx := context.Background()
-	mgr, err := goFeature.NewManager(ctx, 3, BlockSize*GPUBlockNum, BlockNum, BlockSize)
+	mgr, err := goFeature.NewManager(ctx, 0, BlockSize*GPUBlockNum, BlockNum, BlockSize)
 	if err != nil {
 		fmt.Println("Fail to create manager, due to:", err)
 		return
@@ -112,7 +113,7 @@ func main() {
 		wg.Wait()
 		fmt.Printf("Init feature database for set (%d), use time %v \n", i, time.Since(start))
 	}
-
+	runtime.GC()
 	for t := 0; t < 10; t++ {
 		SearchParallel = t + 1
 		totalStart := time.Now()
@@ -123,7 +124,6 @@ func main() {
 				go func(index, parallel int) {
 					set := sets[index]
 					defer wg.Done()
-
 					for b := 0; b < Round; b++ {
 						start := time.Now()
 						r := rand.New(rand.NewSource(time.Now().Unix()))
@@ -145,10 +145,11 @@ func main() {
 					}
 				}(s, p)
 			}
+			wg.Wait()
 		}
-		wg.Wait()
 		fmt.Println("SearchParallel:", SearchParallel,
-			"delay:", time.Duration(delay/int64(SearchParallel*SetNum*Round)),
+			"delay:", time.Duration(delay),
+			"delay/s:", time.Duration(delay/int64(SearchParallel*SetNum*Round)),
 			"QPS:", float64(Round*SearchParallel*SetNum*Batch)/(time.Since(totalStart).Seconds()),
 			"Total search time:", time.Since(totalStart))
 	}

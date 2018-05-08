@@ -2,52 +2,53 @@
 
 package goFeature
 
-import "github.com/unixpickle/cuda"
+import (
+	"fmt"
+	"unsafe"
+
+	"gorgonia.org/cu"
+)
 
 // GPU memory buffer
 type GPUBuffer struct {
-	cuda.Buffer
-	*cuda.Context
+	Ctx  *cu.Ctx
+	Ptr  cu.DevicePtr
+	size int
 }
 
 var _ Buffer = &GPUBuffer{}
 
-func NewGPUBuffer(ctx *cuda.Context, allocator cuda.Allocator, size int) (*GPUBuffer, error) {
-	buffer := &GPUBuffer{
-		Context: ctx,
+func NewGPUBuffer(ctx *cu.Ctx, size int) (*GPUBuffer, error) {
+
+	ptr, err := ctx.MemAlloc(int64(size))
+	if err != nil {
+		fmt.Errorf("NewGPUBuffer (%d) bytes, error: %s", size, err)
+		return nil, ErrAllocateGPUBuffer
 	}
-	err := <-ctx.Run(func() (e error) {
-		buffer.Buffer, e = cuda.AllocBuffer(allocator, uintptr(size))
-		if e != nil {
-			return ErrAllocateGPUBuffer
-		}
-		if e = cuda.ClearBuffer(buffer.Buffer); e != nil {
-			return
-		}
-		return nil
-	})
+	buffer := &GPUBuffer{
+		Ctx:  ctx,
+		Ptr:  ptr,
+		size: size,
+	}
 	return buffer, err
 }
 
-func (b *GPUBuffer) GetBuffer() interface{} { return b.Buffer }
+func (b *GPUBuffer) GetBuffer() interface{} { return b.Ptr }
 
 func (b *GPUBuffer) Write(value FeatureValue) (err error) {
+
 	if len(value) > b.Size() {
 		err = ErrBufferWriteOutofRange
 		return
 	}
-	err = <-b.Context.Run(func() (e error) {
-		return cuda.WriteBuffer(b.Buffer, []byte(value))
-	})
-	return
 
+	b.Ctx.MemcpyHtoD(cu.DevicePtr(b.Ptr), unsafe.Pointer(&value[0]), int64(len(value)))
+	return
 }
 
 func (b *GPUBuffer) Read() (value FeatureValue, err error) {
 	value = make(FeatureValue, b.Size())
-	err = <-b.Context.Run(func() (e error) {
-		return cuda.ReadBuffer([]byte(value), b.Buffer)
-	})
+	b.Ctx.MemcpyDtoH(unsafe.Pointer(&value[0]), cu.DevicePtr(b.Ptr), int64(b.Size()))
 	return
 }
 
@@ -58,25 +59,20 @@ func (b *GPUBuffer) Copy(src Buffer) (err error) {
 
 	switch src.(type) {
 	case *CPUBuffer:
-		err = <-b.Context.Run(func() (e error) {
-			return cuda.WriteBuffer(b.Buffer, src.GetBuffer().([]byte))
-		})
+		return b.Write(src.GetBuffer().([]byte))
 	case *GPUBuffer:
-		err = <-b.Context.Run(func() (e error) {
-			return cuda.CopyBuffer(b.Buffer, src.GetBuffer().(cuda.Buffer))
-		})
+		b.Ctx.Memcpy(cu.DevicePtr(b.Ptr), src.GetBuffer().(cu.DevicePtr), int64(src.Size()))
+		return
 	default:
 		err = ErrInvalidBufferType
 	}
 	return
 }
 
-func (b *GPUBuffer) Size() int { return int(b.Buffer.Size()) }
+func (b *GPUBuffer) Size() int { return b.size }
 
 func (b *GPUBuffer) Reset() (err error) {
-	err = <-b.Context.Run(func() (e error) {
-		return cuda.ClearBuffer(b.Buffer)
-	})
+	b.Ctx.MemsetD8(cu.DevicePtr(b.Ptr), 0, int64(b.Size()))
 	return
 }
 
@@ -89,7 +85,8 @@ func (b *GPUBuffer) Slice(start, end int) (buf Buffer, err error) {
 	}
 
 	return &GPUBuffer{
-		Buffer:  cuda.Slice(b.Buffer, uintptr(start), uintptr(end)),
-		Context: b.Context,
+		Ctx:  b.Ctx,
+		Ptr:  b.Ptr + cu.DevicePtr(start),
+		size: end - start,
 	}, nil
 }
