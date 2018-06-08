@@ -3,6 +3,7 @@ package goFeature
 import (
 	"context"
 	"sync"
+	"time"
 )
 
 type _Manager struct {
@@ -23,8 +24,9 @@ type SearchJob struct {
 	Batch     int
 	Limit     int
 	RetChan   chan struct {
-		Result [][]FeatureSearchResult
-		Err    error
+		Result   [][]FeatureSearchResult
+		Duration map[string]time.Duration
+		Err      error
 	}
 }
 
@@ -184,6 +186,7 @@ func (m *_Manager) Search(name string, threshold FeatureScore, limit int, featur
 	if err != nil {
 		return
 	}
+	duration := map[string]time.Duration{"preload": 0, "sgemm": 0, "DtoH": 0}
 	batch := len(features)
 	if batch > set.Batch {
 		return nil, ErrOutOfBatch
@@ -196,8 +199,9 @@ func (m *_Manager) Search(name string, threshold FeatureScore, limit int, featur
 
 	results := make([][]FeatureSearchResult, batch)
 	retChan := make(chan struct {
-		Result [][]FeatureSearchResult
-		Err    error
+		Result   [][]FeatureSearchResult
+		Duration map[string]time.Duration
+		Err      error
 	}, len(set.Blocks))
 	for _, block := range set.Blocks {
 		core := m.Cores[block.Index%len(m.Cores)]
@@ -223,6 +227,9 @@ func (m *_Manager) Search(name string, threshold FeatureScore, limit int, featur
 				}
 			}
 			results[b] = append(results[b], rr...)
+		}
+		for index, du := range r.Duration {
+			duration[index] += du
 		}
 	}
 	close(retChan)

@@ -5,11 +5,16 @@ package goFeature
 import (
 	"context"
 	"errors"
+	"fmt"
+	"reflect"
 	"strconv"
 	"sync/atomic"
+	"time"
+	"unsafe"
 
-	"github.com/unixpickle/cuda"
-	"github.com/unixpickle/cuda/cublas"
+	"github.com/gonum/blas"
+	"gorgonia.org/cu"
+	cublas "gorgonia.org/cu/blas"
 )
 
 const (
@@ -17,41 +22,31 @@ const (
 )
 
 var (
-	_ctx       *cuda.Context
-	_allocator cuda.Allocator
+	_ctx *cu.Ctx
 )
 
 // initCuda: try to init cuda context and allocator gpu buffer
 func initCuda(gpuID, gpuMemSize int) (Buffer, error) {
-	devices, err := cuda.AllDevices()
-	if err != nil {
-		return nil, errors.New("fail to get all gpu device, due to" + err.Error())
-	}
 
-	if len(devices) < (gpuID - 1) {
-		return nil, errors.New("fail to bind to invalid gpu, id is " + strconv.Itoa(gpuID))
-	}
+	var err error
+	dev := cu.Device(gpuID)
 
-	if _ctx, err = cuda.NewContext(devices[gpuID], 100); err != nil {
-		return nil, errors.New("fail to init cuda context, due to " + err.Error())
-	}
+	_ctx = cu.NewContext(dev, cu.SchedAuto)
 
-	totalMem, err := devices[0].TotalMem()
+	totalMem, err := dev.TotalMem()
 	if err != nil {
 		return nil, errors.New("fail to get the total mem of gpu " + strconv.Itoa(gpuID))
 	}
 	if float64(totalMem)*0.95 < float64(gpuMemSize) {
-		return nil, errors.New("try to allocate too much gpu mem, only " + strconv.FormatUint(totalMem, 10) + "B*0.8 can be used")
+		return nil, errors.New("try to allocate too much gpu mem, only " + strconv.FormatUint(uint64(totalMem), 10) + "B*0.8 can be used")
 	}
 
-	_allocator = cuda.GCAllocator(cuda.NativeAllocator(_ctx), 0)
-
-	return NewGPUBuffer(_ctx, _allocator, gpuMemSize)
+	return NewGPUBuffer(_ctx, gpuMemSize)
 }
 
 type Core struct {
-	*cublas.Handle
 	Buffer
+	Handle *cublas.Standard
 	Input  Buffer
 	Output Buffer
 	// SearchJobQueue
@@ -68,15 +63,19 @@ func NewCore(buffer Buffer) (*Core, error) {
 		Index:  -1,
 		Queue:  make(chan SearchJob, defaultSearchQueueSize),
 	}
-	if core.Handle, err = cublas.NewHandle(_ctx); err != nil {
+	core.Handle = cublas.NewStandardImplementation(cublas.WithContext(_ctx))
+	if core.Handle.Err() != nil {
+		fmt.Println("fail to NewStandardImplementation, err: ", err)
 		return nil, err
 	}
 
-	if core.Input, err = NewGPUBuffer(_ctx, _allocator, maxBatch*maxDimension*maxPrecision); err != nil {
+	if core.Input, err = NewGPUBuffer(_ctx, maxBatch*maxDimension*maxPrecision); err != nil {
+		fmt.Println("fail to Input, err: ", err)
 		return nil, err
 	}
 
-	if core.Output, err = NewGPUBuffer(_ctx, _allocator, buffer.Size()/minDimension*maxBatch); err != nil {
+	if core.Output, err = NewGPUBuffer(_ctx, buffer.Size()/minDimension*maxBatch); err != nil {
+		fmt.Println("fail to Output, err: ", err)
 		return nil, err
 	}
 	return core, nil
@@ -89,10 +88,13 @@ func (c *Core) Do(job SearchJob) {
 func (c *Core) Work(ctx context.Context) {
 	var (
 		ret struct {
-			Result [][]FeatureSearchResult
-			Err    error
+			Result   [][]FeatureSearchResult
+			Duration map[string]time.Duration
+			Err      error
 		}
 	)
+
+	cu.SetCurrentContext(_ctx.CUDAContext())
 
 	for {
 		select {
@@ -101,8 +103,9 @@ func (c *Core) Work(ctx context.Context) {
 			var (
 				err error
 			)
-
+			ret.Duration = make(map[string]time.Duration, 0)
 			version := atomic.LoadUintptr(&job.Block.Version)
+			now := time.Now()
 			if job.Block.Index != c.Index || version != c.Version {
 				if err = c.Buffer.Copy(job.Block.Buffer); err != nil {
 					ret.Err = ErrWriteInputBuffer
@@ -111,60 +114,62 @@ func (c *Core) Work(ctx context.Context) {
 				c.Index = job.Block.Index
 				c.Version = version
 			}
+			ret.Duration["preload"] = time.Since(now)
 
-			ret.Result, ret.Err = c.search(job.Block, job.Input, c.Output, job.Batch, job.Limit)
+			ret.Result, ret.Err, ret.Duration["sgemm"], ret.Duration["DtoH"] = c.search(job.Block, job.Input, c.Output, job.Batch, job.Limit)
 			job.RetChan <- ret
+			//fmt.Println("Index: ", job.Block.Index, ", Duration:", duration)
 		case <-ctx.Done():
 			return
 		}
 	}
 }
 
-func (c *Core) search(block *Block, inputBuffer, outputBuffer Buffer, batch, limit int) (ret [][]FeatureSearchResult, err error) {
+func (c *Core) search(block *Block, inputBuffer, outputBuffer Buffer, batch, limit int) (ret [][]FeatureSearchResult, err error, t1, t2 time.Duration) {
 	height := block.NextIndex
 	if height == 0 {
 		return
 	}
 
-	vec3 := make([]float32, height*batch)
-	err = <-_ctx.Run(func() (e error) {
-		var alpha, beta float32
-		alpha = 1.0
-		beta = 0.0
-		e = c.Handle.Sgemm(
-			cublas.Trans,
-			cublas.NoTrans,
-			height,
-			batch,
-			block.Dims,
-			&alpha,
-			c.Buffer.GetBuffer().(cuda.Buffer),
-			block.Dims,
-			inputBuffer.GetBuffer().(cuda.Buffer),
-			block.Dims,
-			&beta,
-			outputBuffer.GetBuffer().(cuda.Buffer),
-			height,
-		)
-		if e != nil {
-			return
-		}
-		e = cuda.ReadBuffer(vec3, outputBuffer.GetBuffer().(cuda.Buffer))
-		if e != nil {
-			return errors.New("fail to read buffer vec3, err:" + e.Error())
-		}
-		for i := 0; i < batch; i++ {
-			slc, err := outputBuffer.Slice(i*height*block.Precision, (i+1)*height*block.Precision)
-			if slc == nil || err != nil {
-				e = ErrSliceBuffer
-				return
-			}
-		}
-		return nil
-	})
-	if err != nil {
+	//vec3 := make([]float32, height*batch)
+	var vec FeatureValue
+	var alpha, beta float32
+	alpha = 1.0
+	beta = 0.0
+	now := time.Now()
+	c.Handle.Sgemm(
+		blas.Trans,
+		blas.NoTrans,
+		height,
+		batch,
+		block.Dims,
+		alpha,
+		*(*[]float32)(unsafe.Pointer(&reflect.SliceHeader{uintptr(c.Buffer.GetBuffer().(cu.DevicePtr)), c.Buffer.Size() / 4, c.Buffer.Size() / 4})),
+		block.Dims,
+		*(*[]float32)(unsafe.Pointer(&reflect.SliceHeader{uintptr(inputBuffer.GetBuffer().(cu.DevicePtr)), inputBuffer.Size() / 4, inputBuffer.Size() / 4})),
+		block.Dims,
+		beta,
+		*(*[]float32)(unsafe.Pointer(&reflect.SliceHeader{uintptr(outputBuffer.GetBuffer().(cu.DevicePtr)), outputBuffer.Size() / 4, outputBuffer.Size() / 4})),
+		height,
+	)
+	if err = c.Handle.Err(); err != nil {
 		return
 	}
+	t1 = time.Since(now)
+	now = time.Now()
+	vec, err = outputBuffer.Read()
+	if err != nil {
+		return nil, errors.New("fail to read buffer vec3, err:" + err.Error()), t1, t2
+	}
+	t2 = time.Since(now)
+	vec3 := *(*[]float32)(unsafe.Pointer(&reflect.SliceHeader{uintptr(unsafe.Pointer(&vec[0])), len(vec) / 4, len(vec) / 4}))
+	for i := 0; i < batch; i++ {
+		slc, err := outputBuffer.Slice(i*height*block.Precision, (i+1)*height*block.Precision)
+		if slc == nil || err != nil {
+			return nil, ErrSliceBuffer, t1, t2
+		}
+	}
+
 	//  Trans result
 	for i := 0; i < batch; i++ {
 		var result []FeatureSearchResult
@@ -195,7 +200,9 @@ func loadFeatures(features ...FeatureValue) (Buffer, error) {
 		size += len(feature)
 	}
 
-	if buffer, err = NewGPUBuffer(_ctx, _allocator, size); err != nil {
+	cu.SetCurrentContext(_ctx.CUDAContext())
+
+	if buffer, err = NewGPUBuffer(_ctx, size); err != nil {
 		return nil, err
 	}
 
