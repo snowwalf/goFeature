@@ -65,7 +65,7 @@ func main() {
 		for k := 0; k < InitParallel; k++ {
 			wg.Add(1)
 			go func(size int) {
-				r := rand.New(rand.NewSource(time.Now().Unix()))
+				r := rand.New(rand.NewSource(time.Now().UnixNano()))
 				var (
 					values  []float32
 					feature goFeature.Feature
@@ -126,7 +126,7 @@ func main() {
 					defer wg.Done()
 					for b := 0; b < Round; b++ {
 						start := time.Now()
-						r := rand.New(rand.NewSource(time.Now().Unix()))
+						r := rand.New(rand.NewSource(time.Now().UnixNano()))
 						var vec2 []goFeature.FeatureValue
 						for i := 0; i < Batch; i++ {
 							var row []float32

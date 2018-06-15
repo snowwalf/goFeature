@@ -20,10 +20,7 @@ ENV PATH $GOPATH/bin:/usr/local/go/bin:$PATH
 
 RUN mkdir -p "$GOPATH/src" "$GOPATH/bin" && chmod -R 777 "$GOPATH"
 ENV WORKSPACE /workspace/goFeature
-RUN go get -d github.com/unixpickle/cuda && go get -d github.com/unixpickle/cuda/cublas
-RUN go get -d gorgonia.org/cu && wget https://raw.githubusercontent.com/gorgonia/cu/v0.9.0-working/blas/consopt.go -O /go/src/gorgonia.org/cu/blas/consopt.go && \
-    wget http://oqgascup5.bkt.clouddn.com/blas.go -O /go/src/gorgonia.org/cu/blas/blas.go
-RUN go get -d github.com/gonum/blas
+RUN go get -d github.com/gonum/blas && go get -d github.com/snowwalf/cu 
 RUN ln -s /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1
 ENV CUDA_PATH "/usr/local/cuda-8.0"
 ENV CPATH "$CUDA_PATH/include/"

@@ -13,8 +13,8 @@ import (
 	"unsafe"
 
 	"github.com/gonum/blas"
-	"gorgonia.org/cu"
-	cublas "gorgonia.org/cu/blas"
+	"github.com/snowwalf/cu"
+	cublas "github.com/snowwalf/cu/blas"
 )
 
 const (
@@ -46,9 +46,12 @@ func initCuda(gpuID, gpuMemSize int) (Buffer, error) {
 
 type Core struct {
 	Buffer
-	Handle *cublas.Standard
-	Input  Buffer
-	Output Buffer
+	Handle       *cublas.Standard
+	InputHost    Buffer
+	InputDevice  Buffer
+	OutputHost   Buffer
+	OutputDeivce Buffer
+
 	// SearchJobQueue
 	Queue   chan SearchJob
 	Index   int
@@ -69,12 +72,12 @@ func NewCore(buffer Buffer) (*Core, error) {
 		return nil, err
 	}
 
-	if core.Input, err = NewGPUBuffer(_ctx, maxBatch*maxDimension*maxPrecision); err != nil {
-		fmt.Println("fail to Input, err: ", err)
-		return nil, err
-	}
+	// if core.InputDevice, core.InputHost, err = NewMappedGPUBuffer(_ctx, maxBatch*maxDimension*maxPrecision); err != nil {
+	// 	fmt.Println("fail to Input, err: ", err)
+	// 	return nil, err
+	// }
 
-	if core.Output, err = NewGPUBuffer(_ctx, buffer.Size()/minDimension*maxBatch); err != nil {
+	if core.OutputDeivce, core.OutputHost, err = NewMappedGPUBuffer(_ctx, buffer.Size()/minDimension*maxBatch); err != nil {
 		fmt.Println("fail to Output, err: ", err)
 		return nil, err
 	}
@@ -116,16 +119,16 @@ func (c *Core) Work(ctx context.Context) {
 			}
 			ret.Duration["preload"] = time.Since(now)
 
-			ret.Result, ret.Err, ret.Duration["sgemm"], ret.Duration["DtoH"] = c.search(job.Block, job.Input, c.Output, job.Batch, job.Limit)
+			ret.Result, ret.Err, ret.Duration["sgemm"], ret.Duration["DtoH"] = c.search(job.Block, job.Input, job.Batch, job.Limit)
 			job.RetChan <- ret
-			//fmt.Println("Index: ", job.Block.Index, ", Duration:", duration)
+			//fmt.Println("Index: ", job.Block.Index, ", Duration:", ret.Duration)
 		case <-ctx.Done():
 			return
 		}
 	}
 }
 
-func (c *Core) search(block *Block, inputBuffer, outputBuffer Buffer, batch, limit int) (ret [][]FeatureSearchResult, err error, t1, t2 time.Duration) {
+func (c *Core) search(block *Block, inputBuffer Buffer, batch, limit int) (ret [][]FeatureSearchResult, err error, t1, t2 time.Duration) {
 	height := block.NextIndex
 	if height == 0 {
 		return
@@ -134,6 +137,7 @@ func (c *Core) search(block *Block, inputBuffer, outputBuffer Buffer, batch, lim
 	//vec3 := make([]float32, height*batch)
 	var vec FeatureValue
 	var alpha, beta float32
+	outputBuffer := c.OutputDeivce
 	alpha = 1.0
 	beta = 0.0
 	now := time.Now()
@@ -157,7 +161,7 @@ func (c *Core) search(block *Block, inputBuffer, outputBuffer Buffer, batch, lim
 	}
 	t1 = time.Since(now)
 	now = time.Now()
-	vec, err = outputBuffer.Read()
+	vec, err = c.OutputHost.Read()
 	if err != nil {
 		return nil, errors.New("fail to read buffer vec3, err:" + err.Error()), t1, t2
 	}

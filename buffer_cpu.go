@@ -1,5 +1,10 @@
 package goFeature
 
+import (
+	"reflect"
+	"unsafe"
+)
+
 // CPU memory buffer
 type CPUBuffer struct {
 	Buffer []byte
@@ -10,6 +15,13 @@ var _ Buffer = &CPUBuffer{}
 func NewCPUBuffer(size int) *CPUBuffer {
 	return &CPUBuffer{
 		Buffer: make([]byte, size, size),
+	}
+}
+
+func LoadCPUBuffer(ptr unsafe.Pointer, size int) *CPUBuffer {
+
+	return &CPUBuffer{
+		Buffer: *(*[]byte)(unsafe.Pointer(&reflect.SliceHeader{Data: uintptr(ptr), Cap: size, Len: size})),
 	}
 }
 
