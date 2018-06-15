@@ -6,7 +6,8 @@ import (
 	"fmt"
 	"unsafe"
 
-	"gorgonia.org/cu"
+	"github.com/pkg/errors"
+	"github.com/snowwalf/cu"
 )
 
 // GPU memory buffer
@@ -22,7 +23,7 @@ func NewGPUBuffer(ctx *cu.Ctx, size int) (*GPUBuffer, error) {
 
 	ptr, err := ctx.MemAlloc(int64(size))
 	if err != nil {
-		fmt.Errorf("NewGPUBuffer (%d) bytes, error: %s", size, err)
+		fmt.Printf("NewGPUBuffer (%d) bytes, error: %s\n", size, err)
 		return nil, ErrAllocateGPUBuffer
 	}
 	buffer := &GPUBuffer{
@@ -31,6 +32,28 @@ func NewGPUBuffer(ctx *cu.Ctx, size int) (*GPUBuffer, error) {
 		size: size,
 	}
 	return buffer, err
+}
+
+func NewMappedGPUBuffer(ctx *cu.Ctx, size int) (*GPUBuffer, *CPUBuffer, error) {
+
+	hptr, err := ctx.MemHostAlloc(int64(size), cu.HostAllocDeviceMap)
+	if err != nil {
+		return nil, nil, errors.Wrap(err, "NewMappedGPUBuffer")
+	}
+
+	dptr, err := ctx.MemHostGetDevicePointer(hptr)
+	if err != nil {
+		return nil, nil, errors.Wrap(err, "NewMappedGPUBuffer")
+	}
+
+	cpuBuffer := LoadCPUBuffer(hptr, size)
+	gpuBuffer := &GPUBuffer{
+		Ctx:  ctx,
+		Ptr:  dptr,
+		size: size,
+	}
+
+	return gpuBuffer, cpuBuffer, nil
 }
 
 func (b *GPUBuffer) GetBuffer() interface{} { return b.Ptr }

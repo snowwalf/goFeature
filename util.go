@@ -1,6 +1,7 @@
 package goFeature
 
 import (
+	"container/heap"
 	"math"
 	"math/rand"
 	"reflect"
@@ -71,21 +72,50 @@ func TFeatureValue(value interface{}) (FeatureValue, error) {
 	return nil, ErrInvalidBufferData
 }
 
+type _result struct {
+	Value float32
+	Index int
+}
+
+type topNHeap []_result
+
+func (h topNHeap) Len() int            { return len(h) }
+func (h topNHeap) Less(i, j int) bool  { return h[i].Value < h[j].Value }
+func (h topNHeap) Swap(i, j int)       { h[i], h[j] = h[j], h[i] }
+func (h *topNHeap) Push(x interface{}) { *h = append(*h, x.(_result)) }
+func (h *topNHeap) Pop() interface{} {
+	x := (*h)[len(*h)-1]
+	*h = (*h)[:len(*h)-1]
+	return x
+}
+
 func MaxNFloat32(vector []float32, limit int) ([]int, []float32) {
-	type _result struct {
-		Value float32
-		Index int
+	var (
+		scores = &topNHeap{}
+		result _result
+	)
+	result.Value, result.Index = -9999, -1
+	for i := 0; i < limit; i++ {
+		heap.Push(scores, result)
 	}
-	var scores []_result
+	heap.Init(scores)
 	for k, v := range vector {
-		scores = append(scores, _result{Value: v, Index: k})
+		if v > (*scores)[0].Value {
+			heap.Pop(scores)
+			result.Value, result.Index = v, k
+			heap.Push(scores, result)
+		}
 	}
-	sort.Slice(scores, func(i, j int) bool { return scores[i].Value > scores[j].Value })
-	var index []int
-	var max []float32
-	for i := 0; i < limit && i < len(scores); i++ {
-		index = append(index, scores[i].Index)
-		max = append(max, scores[i].Value)
+	index := make([]int, limit)
+	max := make([]float32, limit)
+	for i := 0; i < limit; i++ {
+		result = heap.Pop(scores).(_result)
+		index[limit-1-i] = result.Index
+		max[limit-1-i] = result.Value
+	}
+	if len(vector) < limit {
+		index = index[:len(vector)]
+		max = max[:len(vector)]
 	}
 	return index, max
 }
