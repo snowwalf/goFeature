@@ -24,7 +24,6 @@ var (
 	mgr   Interface
 	cache Cache
 	set   Set
-	//handle *cublas.Handle
 )
 
 func init() {
