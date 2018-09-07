@@ -11,13 +11,9 @@
 ## Dependency
 
 ```
-go get github.com/unixpickle/cuda
-go get github.com/unixpickle/cuda/cublas
+go get  github.com/gonum/blas
+go get  github.com/snowwalf/cu 
 ```
-
-## Documents
-* [unixpickle/cuda](https://godoc.org/github.com/unixpickle/cuda)
-* [unixpickle/cublas](https://godoc.org/github.com/unixpickle/cuda/cublas)
 
 
 ## Docker Compile Environment

@@ -8,8 +8,6 @@ import (
 	"math/rand"
 	"testing"
 	"time"
-
-	"github.com/unixpickle/cuda/cublas"
 )
 
 const (
@@ -23,10 +21,10 @@ const (
 )
 
 var (
-	mgr    Interface
-	cache  Cache
-	set    Set
-	handle *cublas.Handle
+	mgr   Interface
+	cache Cache
+	set   Set
+	//handle *cublas.Handle
 )
 
 func init() {

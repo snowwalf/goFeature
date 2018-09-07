@@ -14,7 +14,7 @@ var _ Buffer = &CPUBuffer{}
 
 func NewCPUBuffer(size int) *CPUBuffer {
 	return &CPUBuffer{
-		Buffer: make([]byte, size, size),
+		Buffer: make([]byte, size),
 	}
 }
 
